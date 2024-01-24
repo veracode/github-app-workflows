@@ -2,34 +2,53 @@ name: Binary Ready - Veracode Static Code Analysis
 
 run-name: Binary Ready - Static Code Analysis - ${{ github.event.client_payload.repository.name }}
 
+concurrency:
+  group: ${{ github.event.client_payload.event_type }}-${{ github.event.client_payload.repository.name }}-${{ github.event.client_payload.branch }}
+  cancel-in-progress: true
+
 on:
   repository_dispatch:
     types: [binary-ready-veracode-sast-pipeline-scan]
 
 jobs:
-  register:
+  create-checks-run:
+    name: Create Checks Run
     runs-on: ubuntu-latest
     steps:
-    - uses: veracode/Veracode-github-app@aws-ecs-dynamodb
+    - uses: veracode/veracode-checks-action@main
+      name: Create Checks Run
+      id: create_checks_run
       with:
-        callback_url: ${{ github.event.client_payload.callback_url }}
+        token: ${{ github.event.client_payload.token }}
+        repo: ${{ github.event.client_payload.repository.full_name }}
         sha: ${{ github.event.client_payload.sha }}
-        branch: ${{ github.event.client_payload.branch }}
-        run_id: ${{ github.run_id }}
-        repository_owner: ${{ github.event.client_payload.repository.owner }}
-        repository_name: ${{ github.event.client_payload.repository.name }}
-        event_type: ${{ github.event.client_payload.event_type }}
-        enforce: true
+        name: "Veracode Static Code Analysis"
+        status: 'in_progress'
+        details_url: "https://github.com/${{ github.event.client_payload.repository.owner }}/veracode/actions/runs/${{ github.run_id }}"
+    - name: Create metadata
+      id: create_metadata_json
+      run: |
+        echo '{
+          "check_run_type": "${{ github.event.client_payload.event_type }}",
+          "repository_name": "${{ github.event.client_payload.repository.name }}",
+          "check_run_id": ${{ steps.create_checks_run.outputs.check_id }},
+          "sha": "${{ github.event.client_payload.sha }}"
+        }' > workflow-metadata.json
+    - name: Save metadata
+      uses: actions/upload-artifact@v3
+      with:
+        name: workflow-metadata
+        path: workflow-metadata.json
         
   pipeline_scan:
-    needs: register
+    needs: create-checks-run
     runs-on: ubuntu-latest
     steps:
     - name: Download artifact
       id: download-artifact
       uses: dawidd6/action-download-artifact@v2
       with:
-        github_token: ${{secrets.GITHUB_TOKEN}}
+        github_token: ${{ github.event.client_payload.token }}
         run_id: ${{ github.event.client_payload.run_id }}
         repo: ${{ github.event.client_payload.repository.full_name }}
     - name: Get the name of the downloaded files
@@ -38,9 +57,10 @@ jobs:
         echo "veracode_artifact=$artifact_file" >> $GITHUB_ENV
     - name: Veracode Pipeline-Scan
       id: pipeline-scan
-      uses: veracode/Veracode-pipeline-scan-action@v1.0.8
+      uses: veracode/Veracode-pipeline-scan-action@v1.0.10
       with:
-        vid: ${{ secrets.API_ID }}
-        vkey: ${{ secrets.API_KEY }}
+        vid: ${{ secrets.VERACODE_API_ID }}
+        vkey: ${{ secrets.VERACODE_API_KEY }}
         file: ./veracode-artifact/${{ env.veracode_artifact }}
         fail_build: true
+        # include: bin/Verademo-dotnet.dll
